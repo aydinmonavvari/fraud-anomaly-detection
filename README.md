@@ -46,18 +46,24 @@ with supervised learners on equal terms.
 1. **Data source (two modes, always labeled):**
    - *synthetic* (default): a seeded generator producing the statistical shape of
      PCA-anonymized card-fraud data (28 Gaussian components + amount, ~0.17% fraud),
-     including **15% "stealth" fraud** drawn from the legitimate distribution — so
-     perfect detection is impossible by construction, as in reality;
+     including **15% "stealth" fraud** drawn i.i.d. from the legitimate
+     distribution — those rows carry no marginal signal in any single feature,
+     which caps univariate detectability by design (a design cap, not a proof of
+     Bayes-optimality), as in reality;
    - *kaggle*: the ULB credit-card dataset, downloaded by the user into `data/raw/`
      (see §7); the repository never redistributes it.
-2. **Split** — stratified 70/30; all models fit on train only.
+2. **Split** — stratified three-way 49/21/30 (train/validation/test); all models
+   fit on train only; the cost-optimal threshold is selected on the **validation**
+   split; the test set is used exactly once, for final metrics at that fixed
+   threshold.
 3. **Unsupervised arm** — Isolation Forest (300 trees, contamination = fraud rate);
    never sees labels; scored by `−score_samples`.
 4. **Supervised arm** — logistic regression, random forest, gradient boosting, all
    with `class_weight` balancing and preprocessing inside pipelines.
 5. **Evaluation** — PR-AUC (primary), ROC-AUC (reported with explicit caveats),
    precision/recall @ top-0.1% and top-1% (review-queue operating points),
-   cost-optimal threshold under FN:FP = 10:1, and the confusion matrix at that point.
+   cost-optimal threshold under FN:FP = 10:1 selected on validation, and the
+   test-set confusion matrix at that point.
 
 ## 6 · Dataset
 
@@ -67,7 +73,7 @@ with supervised learners on equal terms.
 | Rows | 60,000 | 284,807 |
 | Fraud rate | ~0.17% | 0.173% |
 | Features | V1..V28 (Gaussian) + Amount | V1..V28 (PCA) + Amount |
-| Stealth frauds | 15% undetectable by construction | unknown (nature) |
+| Stealth frauds | 15% drawn i.i.d. from the legitimate distribution (no univariate signal by design) | unknown (nature) |
 
 All numbers in this committed README/reports come from the **synthetic** run and are
 labeled as such. **No real-dataset results are claimed anywhere.** Running with
@@ -86,7 +92,7 @@ study validates the file, uses it read-only, and never commits it.
 ```
 data source (labeled): synthetic generator  |  Kaggle CSV (user-provided)
                           │
-                 stratified 70/30 split
+        stratified 49/21/30 split (train/val/test)
                           │
       ┌───────────────────┴────────────────────┐
  unsupervised                            supervised
@@ -95,7 +101,8 @@ data source (labeled): synthetic generator  |  Kaggle CSV (user-provided)
       └───────────────────┬────────────────────┘
             PR-AUC (primary) · ROC-AUC (caveated)
             precision@0.1% · precision@1% (review queues)
-            cost-optimal threshold (FN=10×FP) + confusion
+            cost-optimal threshold (FN=10×FP, selected on validation)
+            test-set confusion at that fixed threshold
                           │
         figures: PR vs ROC · metric comparison bar chart
 ```
@@ -114,12 +121,17 @@ precision@1% measure exactly that.
 
 **Why a threshold economics layer.** Missing fraud (FN) and harassing a customer (FP)
 have different costs (10:1 in the base case). The cost-optimal threshold is chosen on
-the PR curve, and the resulting confusion matrix is reported — not a default 0.5.
+the PR curve of the **validation** split — never on the test set — and the test-set
+confusion matrix at that fixed threshold is reported; not a default 0.5. The
+committed artifacts record `threshold_source: validation` for every model.
 
 **Integrity controls.** The synthetic mode is labeled in every report and figure
 caption context; no metric is ever attributed to real-world data unless the user runs
 the Kaggle mode locally; unit tests pin the generator's fraud rate and signal
-structure.
+structure, verify that the stealth subset is statistically indistinguishable from
+legitimate rows on every column (max |SMD| and KS checks) and that univariate
+detectability is capped at chance (AUC ≈ 0.5 for V1 and Amount), and guard that the
+cost-optimal threshold is selected on validation labels only.
 
 ## 10 · Models
 
@@ -145,35 +157,40 @@ All `random_state = 42`.
 Actual outputs of the committed **synthetic-mode** run
 (`reports/fraud_results.json`, provenance field included).
 
-| Model | PR-AUC ↑ | ROC-AUC | Precision@1% | Recall@1% | Cost-opt. thr. | Expected cost |
+| Model | PR-AUC ↑ | ROC-AUC | Precision@1% | Recall@1% | Cost-opt. thr. (val) | Expected cost |
 | --- | --- | --- | --- | --- | --- | --- |
-| Random forest | **0.728** | 0.983 | 0.150 | 0.871 | 0.183 | **99** |
-| Gradient boosting | 0.416 | 0.943 | 0.139 | 0.807 | 0.0002 | 158 |
-| Logistic regression | 0.308 | 0.979 | 0.139 | 0.807 | 0.993 | 154 |
-| Isolation Forest | 0.130 | 0.914 | 0.061 | 0.355 | 0.517 | 258 |
+| Random forest | **0.614** | 0.937 | 0.139 | 0.806 | 0.129 | **154** |
+| Gradient boosting | 0.316 | 0.902 | 0.111 | 0.645 | 0.0001 | 190 |
+| Logistic regression | 0.262 | 0.903 | 0.122 | 0.710 | 0.936 | 169 |
+| Isolation Forest | 0.095 | 0.875 | 0.056 | 0.323 | 0.512 | 281 |
 
-Base rate 0.0017 — i.e. random-queue precision@1% would be ≈0.0017; random forest's
-0.150 is an **88× lift**. Figures:
+Split: train 29,400 (50 frauds) · validation 12,600 (21 frauds) · test 18,000
+(31 frauds), stratified, seed 42. Thresholds are selected on validation only
+(`threshold_source: validation` in the JSON); the test set is scored once at that
+fixed threshold. Base rate 0.0017 — i.e. random-queue precision@1% would be
+≈0.0017; random forest's 0.139 is an **≈81× lift**. Figures:
 [`pr_roc_curves.png`](figures/pr_roc_curves.png) (PR and ROC side by side),
 [`metric_comparison.png`](figures/metric_comparison.png) (the ROC/PR gap made visual).
 
 ## 13 · Interpretation
 
 1. **ROC-AUC is nearly useless here — and the table proves it.** All four models sit
-   between 0.91 and 0.98 ROC-AUC (the true-negative mass flatters everyone), while
-   their PR-AUCs span 0.13 → 0.73, a 5.6× range. Anyone screening fraud models by ROC
-   would be unable to rank them; by PR they are trivially separated.
+   between 0.87 and 0.94 ROC-AUC (the true-negative mass flatters everyone), while
+   their PR-AUCs span 0.095 → 0.614, a 6.5× range. Anyone screening fraud models by
+   ROC would be unable to rank them; by PR they are trivially separated.
 2. **The unsupervised handicap is quantified, not assumed.** Isolation Forest — which
-   never saw a label — achieves PR-AUC 0.13, ~5.6× below the best supervised model.
+   never saw a label — achieves PR-AUC 0.095, ~6.5× below the best supervised model.
    Unsupervised detection is still valuable when labels do not exist; the study makes
    its cost explicit.
-3. **The supervised models are not equivalent either.** Random forest (0.728) more
-   than doubles logistic regression (0.308) on PR-AUC despite similar ROC-AUC — the
+3. **The supervised models are not equivalent either.** Random forest (0.614) more
+   than doubles logistic regression (0.262) on PR-AUC despite similar ROC-AUC — the
    nonlinear component interactions carry most of the achievable signal.
-4. **Thresholds do heavy lifting.** Optimal thresholds range from 0.0002 to 0.99
-   across models — naive 0.5 would be badly wrong for all of them. At the cost-optimal
-   point, random forest catches 22 of 31 test frauds while flagging only 9 legitimate
-   transactions.
+4. **Thresholds do heavy lifting.** Validation-selected thresholds range from 0.0001
+   to 0.94 across models — naive 0.5 would be badly wrong for several of them. At the
+   validation-selected point, random forest catches 17 of 31 test frauds while
+   flagging 14 legitimate transactions; scoring the test set at a default 0.5 instead
+   of the validation-selected threshold would multiply expected cost by 2.0× for
+   random forest (310 → 154) and 7.8× for logistic regression (1,315 → 169).
 5. **Honest limits of the evidence.** Every number above is a property of the
    synthetic generator (labeled as such). The *methods and evaluation discipline*
    transfer to real data; the *numbers* do not. Running `--source kaggle` on the real
@@ -184,6 +201,11 @@ Base rate 0.0017 — i.e. random-queue precision@1% would be ≈0.0017; random f
 - **Synthetic primary results.** Real fraud is adversarial, non-stationary and
   richer (time, merchant graphs, device fingerprints); the generator captures only
   the shape of the problem. No real-dataset performance is claimed.
+- **Small absolute fraud counts in validation and test.** The dedicated validation
+  split (used for threshold selection) contains 21 frauds and the test split 31, so
+  the validation-selected threshold and the test-set cost/confusion estimates carry
+  substantial sampling uncertainty; cross-model cost comparisons are indicative, not
+  precise.
 - **Static snapshot.** No temporal drift, no concept drift, no adversarial adaptation.
 - **Cost model.** FN:FP = 10:1 is illustrative; real ratios vary by merchant and
   fraud type and include friction/retention effects.
@@ -198,7 +220,7 @@ Base rate 0.0017 — i.e. random-queue precision@1% would be ≈0.0017; random f
 python -m venv .venv && source .venv/bin/activate
 pip install -e .[dev]
 
-# 2) run on the reproducible synthetic mode (no network, ~2 min)
+# 2) run on the reproducible synthetic mode (no network, ~3 min)
 python scripts/run_study.py
 
 # 3) optional: real data (user-provided; see section 7)
@@ -206,7 +228,7 @@ kaggle datasets download -d mlg-ulb/creditcardfraud
 unzip creditcardfraud.zip -d data/raw/
 python scripts/run_study.py --source kaggle
 
-# 4) verify: lint + 7 offline unit tests
+# 4) verify: lint + 10 offline unit tests
 ruff check .
 pytest -q
 ```
@@ -243,11 +265,12 @@ print(precision_at_k(frame["Class"], frame["V1"], 0.01))
 ## 18 · Example
 
 Reading the committed run like a fraud-operations review: the team can investigate
-1% of the transaction queue. Random forest fills that 1% with 15% fraud — an 88× lift
-over random triage — while Isolation Forest reaches only 6.1%. Under the 10:1 cost
-model, the random-forest operating point catches 71% of fraud at the cost of 9
-flagged legitimate transactions. Which model to deploy, and what threshold to set, is
-now a quantified business conversation rather than a leaderboard comparison.
+1% of the transaction queue. Random forest fills that 1% with 13.9% fraud — an ≈81×
+lift over random triage — while Isolation Forest reaches only 5.6%. Under the 10:1
+cost model, the random-forest operating point (threshold selected on validation)
+catches 55% of fraud (17 of 31 test frauds) at the cost of 14 flagged legitimate
+transactions. Which model to deploy, and what threshold to set, is now a quantified
+business conversation rather than a leaderboard comparison.
 
 ## 19 · Project structure
 
@@ -257,16 +280,16 @@ fraud-anomaly-detection/
 ├── LICENSE · CITATION.cff · pyproject.toml · requirements.txt
 ├── .python-version · .gitignore
 ├── src/fraud_anomaly_detection/
-│   ├── config.py        # source switch, costs, contamination, paths
+│   ├── config.py        # source switch, split sizes, costs, contamination, paths
 │   ├── data.py          # labeled synthetic generator + Kaggle loader
 │   ├── models.py        # Isolation Forest + supervised factories
 │   ├── evaluation.py    # PR-AUC, precision@k, cost-optimal thresholds
-│   └── pipeline.py      # orchestration + reports + figures
-├── tests/               # 7 offline tests (generator, metric math, thresholds)
-├── notebooks/           # imbalance-metrics walkthrough
+│   └── pipeline.py      # 49/21/30 orchestration + reports + figures
+├── tests/               # 10 offline tests (generator, stealth properties,
+│                        #  split/threshold guard, metric math, thresholds)
 ├── scripts/run_study.py # CLI (--source synthetic|kaggle)
 ├── data/raw · data/processed   # git-ignored (.gitkeep tracked)
-├── reports/             # JSON/CSV results with provenance field
+├── reports/             # JSON/CSV results with provenance + threshold_source fields
 ├── figures/             # generated figures (committed)
 ├── docs/research_report.md
 └── .github/workflows/ci.yml

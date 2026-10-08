@@ -22,7 +22,12 @@ class FraudConfig:
     contamination:
         Expected fraud fraction used by Isolation Forest.
     test_size:
-        Fraction held out (stratified) for evaluation.
+        Fraction held out (stratified) for final evaluation only; the test set
+        is scored exactly once, at the validation-selected threshold.
+    val_size:
+        Fraction held out (stratified) for model-free decisions - i.e. the
+        cost-optimal threshold. With the defaults, the three-way split is
+        train 49% / validation 21% / test 30%.
     random_state:
         Global seed.
     fn_cost, fp_cost:
@@ -32,6 +37,7 @@ class FraudConfig:
     source: str = "synthetic"
     contamination: float = 0.0017  # ~ the real dataset's 0.173% rate
     test_size: float = 0.30
+    val_size: float = 0.21
     random_state: int = 42
     fn_cost: float = 10.0
     fp_cost: float = 1.0

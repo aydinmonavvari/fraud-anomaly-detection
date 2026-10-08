@@ -45,40 +45,76 @@ def run_pipeline(config: FraudConfig | None = None, save_outputs: bool = True) -
 
     X = frame.drop(columns=["Class"])
     y = frame["Class"].astype(int)
-    X_train, X_test, y_train, y_test = train_test_split(
+
+    # ---- stratified three-way split: train / validation / test -------------
+    # The test set is reserved for FINAL evaluation only. All model-free
+    # decisions - here, the cost-optimal threshold - are made on the
+    # validation split, so the reported test metrics never feed back into
+    # any choice (no test-set contamination of the operating point).
+    X_trainval, X_test, y_trainval, y_test = train_test_split(
         X, y, test_size=config.test_size, stratify=y, random_state=config.random_state
     )
+    val_fraction = config.val_size / (1.0 - config.test_size)
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_trainval,
+        y_trainval,
+        test_size=val_fraction,
+        stratify=y_trainval,
+        random_state=config.random_state,
+    )
+    split_sizes = {
+        "train_n": int(len(y_train)),
+        "val_n": int(len(y_val)),
+        "test_n": int(len(y_test)),
+        "train_frauds": int(y_train.sum()),
+        "val_frauds": int(y_val.sum()),
+        "test_frauds": int(y_test.sum()),
+        "threshold_source": "validation",
+    }
+    logger.info(
+        "split: train=%d (fraud %d) | val=%d (fraud %d) | test=%d (fraud %d)",
+        split_sizes["train_n"], split_sizes["train_frauds"],
+        split_sizes["val_n"], split_sizes["val_frauds"],
+        split_sizes["test_n"], split_sizes["test_frauds"],
+    )
 
-    scores: dict[str, np.ndarray] = {}
+    val_scores: dict[str, np.ndarray] = {}
+    test_scores: dict[str, np.ndarray] = {}
     fallbacks: dict[str, str] = {}
 
     # ---- unsupervised: Isolation Forest (never sees labels) ----------------
     iso = fit_isolation_forest(X_train, config.contamination, config.random_state)
-    scores["isolation_forest"] = isolation_scores(iso, X_test)
+    val_scores["isolation_forest"] = isolation_scores(iso, X_val)
+    test_scores["isolation_forest"] = isolation_scores(iso, X_test)
 
     # ---- supervised --------------------------------------------------------
     supervised = make_supervised(config.random_state)
     for name in ("logistic_regression", "random_forest", "gradient_boosting"):
         try:
             model = supervised[name]
-            model.fit(X_train, y_train)
-            scores[name] = model.predict_proba(X_test)[:, 1]
+            model.fit(X_train, y_train)  # training data only
+            val_scores[name] = model.predict_proba(X_val)[:, 1]
+            test_scores[name] = model.predict_proba(X_test)[:, 1]
         except Exception as exc:  # record failure honestly, keep others running
             logger.error("model %s failed: %s", name, exc)
             fallbacks[name] = str(exc)
 
     # ---- evaluation --------------------------------------------------------
+    # Threshold: selected on VALIDATION scores/labels only.
+    # Test: scored once, at that fixed threshold, for the reported metrics.
     metric_rows = []
-    for name, y_score in scores.items():
+    for name, val_score in val_scores.items():
+        y_score = test_scores[name]
         metrics = discrimination_metrics(y_test, y_score)
         metrics.update(precision_at_k(y_test, y_score, 0.001))
         metrics.update(precision_at_k(y_test, y_score, 0.01))
-        thr = cost_optimal_threshold(y_test, y_score, config.fn_cost, config.fp_cost)
+        thr = cost_optimal_threshold(y_val, val_score, config.fn_cost, config.fp_cost)
         entries = confusion_at_threshold(y_test, y_score, thr)
         metrics.update(
             {
                 "model": name,
                 "cost_threshold": thr,
+                "threshold_source": "validation",
                 "expected_cost": expected_cost(entries, config.fn_cost, config.fp_cost),
                 **{f"{k}_at_thr": v for k, v in entries.items()},
             }
@@ -87,18 +123,23 @@ def run_pipeline(config: FraudConfig | None = None, save_outputs: bool = True) -
     metrics_tbl = pd.DataFrame(metric_rows).set_index("model")
 
     if save_outputs:
-        _save(config, metrics_tbl, scores, y_test, provenance, fallbacks)
+        _save(config, metrics_tbl, test_scores, y_test, provenance, fallbacks,
+              split_sizes)
 
-    return {"metrics": metrics_tbl, "provenance": provenance, "scores": scores,
-            "y_test": y_test, "fallbacks": fallbacks}
+    return {"metrics": metrics_tbl, "provenance": provenance,
+            "scores": test_scores, "val_scores": val_scores,
+            "y_test": y_test, "y_val": y_val, "split_sizes": split_sizes,
+            "fallbacks": fallbacks}
 
 
-def _save(config, metrics_tbl, scores, y_test, provenance, fallbacks) -> None:
+def _save(config, metrics_tbl, scores, y_test, provenance, fallbacks,
+          split_sizes) -> None:
     payload = {
         "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
         "project": "fraud-anomaly-detection",
         "provenance": provenance,
         "fallbacks": fallbacks,
+        "split": split_sizes,
         "config": {
             k: (str(v).replace(str(PROJECT_ROOT) + "/", "") if isinstance(v, Path) else v)
             for k, v in asdict(config).items()

@@ -1,5 +1,5 @@
-model,pr_auc,roc_auc,base_rate,precision_at_0pct,recall_at_0pct,precision_at_1pct,recall_at_1pct,cost_threshold,expected_cost,tn_at_thr,fp_at_thr,fn_at_thr,tp_at_thr
-isolation_forest,0.129737,0.914433,0.001722,0.333333,0.193548,0.061111,0.354839,0.516869,258.0,17961,8,25,6
-logistic_regression,0.307463,0.978861,0.001722,0.444444,0.258065,0.138889,0.806452,0.992573,154.0,17905,64,9,22
-random_forest,0.727928,0.983389,0.001722,0.944444,0.548387,0.15,0.870968,0.182776,99.0,17960,9,9,22
-gradient_boosting,0.415747,0.942652,0.001722,0.666667,0.387097,0.138889,0.806452,0.000206,158.0,17891,78,8,23
+model,pr_auc,roc_auc,base_rate,precision_at_0pct,recall_at_0pct,precision_at_1pct,recall_at_1pct,cost_threshold,threshold_source,expected_cost,tn_at_thr,fp_at_thr,fn_at_thr,tp_at_thr
+isolation_forest,0.095027,0.87477,0.001722,0.277778,0.16129,0.055556,0.322581,0.512433,validation,281.0,17958,11,27,4
+logistic_regression,0.262465,0.902784,0.001722,0.444444,0.258065,0.122222,0.709677,0.936432,validation,169.0,17920,49,12,19
+random_forest,0.613832,0.93724,0.001722,0.833333,0.483871,0.138889,0.806452,0.129479,validation,154.0,17955,14,14,17
+gradient_boosting,0.31599,0.902333,0.001722,0.555556,0.322581,0.111111,0.645161,0.000134,validation,190.0,17919,50,14,17

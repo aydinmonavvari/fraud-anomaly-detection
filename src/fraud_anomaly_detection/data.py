@@ -17,7 +17,9 @@ def make_synthetic(
     n: int = 60_000,
     contamination: float = 0.0017,
     seed: int = 42,
-) -> pd.DataFrame:
+    stealth_fraction: float = 0.15,
+    return_stealth_mask: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, np.ndarray]:
     """Generate a *clearly-labeled synthetic* fraud-detection dataset.
 
     Mimics the statistical shape of PCA-anonymized card-fraud data (28
@@ -27,7 +29,24 @@ def make_synthetic(
     have something real to find - but every number produced from this mode is
     a property of the generator, NOT of real-world fraud. The study marks all
     such outputs accordingly.
+
+    Intended stealth property: stealth frauds are drawn i.i.d. from the
+    legitimate distribution; they carry no marginal signal in any single
+    feature. This caps univariate detectability by design; it does not
+    constitute a proof of Bayes-optimality.
+
+    Args:
+        n: total rows.
+        contamination: fraud fraction (``n * contamination`` fraud rows).
+        seed: RNG seed (fully reproducible).
+        stealth_fraction: fraction of fraud rows that are "stealth", i.e.
+            redrawn from the legitimate distributions (features AND amount).
+        return_stealth_mask: if True, also return a boolean array aligned with
+            the returned frame marking the stealth fraud rows (used by the
+            generator-property tests; the committed study does not need it).
     """
+    if not 0.0 <= stealth_fraction < 1.0:
+        raise ValueError("stealth_fraction must be in [0, 1)")
     rng = np.random.default_rng(seed)
     n_fraud = max(1, int(round(n * contamination)))
     n_legit = n - n_fraud
@@ -41,21 +60,30 @@ def make_synthetic(
     # fraud: a few components shifted (the "signal"), but a documented
     # fraction of frauds is "stealth" (drawn from the legitimate
     # distribution) so that perfect detection is impossible - as in reality
-    stealth = rng.uniform(size=n_fraud) < 0.15
+    stealth = rng.uniform(size=n_fraud) < stealth_fraction
+    n_stealth = int(stealth.sum())
     v_fraud = rng.normal(0.0, 1.0, size=(n_fraud, d))
     # deterministic core signal dims (V1..V3) + seeded random extras, so the
     # generator is reproducible AND always findable by feature-name
     signal_dims = [0, 1, 2, *rng.choice(range(3, d), size=4, replace=False).tolist()]
     for dim in signal_dims:
         v_fraud[:, dim] += rng.normal(1.7, 0.4)  # moderate location shift
-    v_fraud[stealth] = rng.normal(0.0, 1.0, size=(int(stealth.sum()), d))
     v_fraud[:, 0] *= rng.uniform(1.8, 2.6, size=n_fraud)
     amount_fraud = np.abs(rng.lognormal(mean=4.4, sigma=1.4, size=n_fraud))
+    # Stealth rows are overwritten LAST: every feature column AND the amount
+    # get a fresh draw from the same distributions/parameters used for
+    # legitimate rows, so the stealth subset is statistically
+    # indistinguishable from legitimate rows on every column (i.i.d. samples
+    # of the legitimate distribution - no marginal signal in any feature).
+    v_fraud[stealth] = rng.normal(0.0, 1.0, size=(n_stealth, d))
+    amount_fraud[stealth] = np.abs(rng.lognormal(mean=3.2, sigma=1.1, size=n_stealth))
     y_fraud = np.ones(n_fraud, dtype=int)
 
     v = np.vstack([v_legit, v_fraud])
     amounts = np.concatenate([amount_legit, amount_fraud])
     y = np.concatenate([y_legit, y_fraud])
+    stealth_full = np.zeros(n, dtype=bool)
+    stealth_full[n_legit:] = stealth
     order = rng.permutation(n)
 
     frame = pd.DataFrame(v, columns=[f"V{i+1}" for i in range(d)])
@@ -64,6 +92,8 @@ def make_synthetic(
     frame = frame.iloc[order].reset_index(drop=True)
     if not 0 < frame["Class"].mean() < 0.05:
         raise ValueError("synthetic generator produced an implausible fraud rate")
+    if return_stealth_mask:
+        return frame, stealth_full[order]
     return frame
 
 
