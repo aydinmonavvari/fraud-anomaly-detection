@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "fraud-anomaly-detection: supervised vs unsupervised detection with PR-AUC-first evaluation"
+authors:
+  - family-names: Monavvari
+    given-names: Aydin
+    email: 245710241+aydinmonavvari@users.noreply.github.com
+version: 1.0.0
+date-released: "2026-10-08"
+license: MIT
+repository-code: "https://github.com/aydinmonavvari/fraud-anomaly-detection"
+keywords:
+  - fraud-detection
+  - anomaly-detection
+  - isolation-forest
+  - class-imbalance
+  - pr-auc
+abstract: "Educational research project comparing Isolation Forest and supervised classifiers for fraud detection, with PR-AUC-first evaluation, precision@k operating points, cost-based thresholds, and a clearly-labeled synthetic data mode for reproducibility without gated data."
